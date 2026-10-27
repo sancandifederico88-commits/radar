@@ -1,0 +1,16 @@
+{
+  "name": "TAC-RADAR Tattico Softair",
+  "short_name": "TAC-RADAR",
+  "start_url": "app.html",
+  "display": "fullscreen",
+  "background_color": "#020403",
+  "theme_color": "#020403",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "https://icons8.com",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

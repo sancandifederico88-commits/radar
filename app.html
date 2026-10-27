@@ -1,0 +1,780 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>TAC-RADAR // SOFTAIR</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://unpkg.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    :root {
+      --bg: #020403;
+      --panel: rgba(4, 12, 8, 0.90);
+      --green: #39ff14;
+      --green-dim: #1a8f2a;
+      --amber: #d4ff00;
+      --blue: #3ecbff;
+      --red: #ff3b3b;
+      --text: #c8ffc8;
+      --muted: #6d9a6d;
+      --line: rgba(57, 255, 20, 0.35);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Share Tech Mono", ui-monospace, monospace;
+      overflow: hidden;
+    }
+
+    #map {
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      background: #000;
+    }
+
+    .leaflet-container { background: #050807; font-family: inherit; }
+    .leaflet-control-attribution {
+      background: rgba(0, 0, 0, 0.55) !important;
+      color: var(--muted) !important;
+      font-size: 10px !important;
+    }
+    .leaflet-control-attribution a { color: var(--green-dim) !important; }
+    .leaflet-control-zoom { display: none; }
+
+    .hud {
+      position: absolute;
+      inset: 0;
+      z-index: 500;
+      pointer-events: none;
+    }
+
+    .scan {
+      position: absolute;
+      inset: 0;
+      background:
+        repeating-linear-gradient(
+          0deg,
+          transparent 0 3px,
+          rgba(0, 255, 70, 0.035) 3px 4px
+        );
+      mix-blend-mode: screen;
+      animation: flicker 6s infinite;
+    }
+
+    .sweep {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: min(140vw, 140vh);
+      height: min(140vw, 140vh);
+      transform: translate(-50%, -50%);
+      background: conic-gradient(
+        from 0deg,
+        transparent 0deg,
+        rgba(57, 255, 20, 0.18) 18deg,
+        transparent 42deg
+      );
+      animation: sweep 4.2s linear infinite;
+      pointer-events: none;
+      mask-image: radial-gradient(circle, black 0%, black 42%, transparent 58%);
+    }
+
+    @keyframes sweep { to { transform: translate(-50%, -50%) rotate(360deg); } }
+    @keyframes flicker {
+      0%, 97%, 100% { opacity: 1; }
+      98% { opacity: 0.7; }
+    }
+
+    .corner {
+      position: absolute;
+      width: 32px;
+      height: 32px;
+      border: 1px solid var(--green);
+      opacity: 0.55;
+    }
+    .corner.tl { top: 78px; left: 12px; border-right: 0; border-bottom: 0; }
+    .corner.tr { top: 78px; right: 12px; border-left: 0; border-bottom: 0; }
+    .corner.bl { bottom: 162px; left: 12px; border-right: 0; border-top: 0; }
+    .corner.br { bottom: 162px; right: 12px; border-left: 0; border-top: 0; }
+
+    .topbar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      background: var(--panel);
+      border-bottom: 1px solid var(--line);
+      padding: 8px 12px;
+      z-index: 610;
+      pointer-events: auto;
+      gap: 4px;
+    }
+
+    .topbar-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .brand { color: var(--green); letter-spacing: 0.18em; font-size: 14px; font-weight: bold; }
+    .brand span { color: var(--amber); }
+
+    .status { font-size: 11px; color: var(--muted); display: flex; gap: 10px; }
+    .status b { color: var(--green); font-weight: 400; }
+    .status .warn { color: var(--amber); }
+    .status .bad { color: var(--red); }
+
+    .telemetry-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      border-top: 1px solid rgba(57, 255, 20, 0.15);
+      padding-top: 4px;
+      font-size: 11px;
+      overflow-x: auto;
+      white-space: nowrap;
+    }
+    .telemetry-item { display: flex; gap: 4px; }
+    .telemetry-item span { color: var(--muted); }
+    .telemetry-item strong { color: var(--text); font-weight: 400; }
+
+    .sidecard, .contacts { display: none; }
+
+    .dock {
+      position: absolute;
+      left: 0;
+      bottom: 0;
+      width: 100%;
+      z-index: 600;
+      pointer-events: auto;
+      display: flex;
+      gap: 8px;
+      padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
+      background: linear-gradient(to top, rgba(2,4,3,0.95) 80%, transparent);
+    }
+
+    button {
+      flex: 1;
+      height: 60px;
+      pointer-events: auto;
+      font-family: inherit;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-size: 13px;
+      font-weight: bold;
+      color: var(--green);
+      background: rgba(6, 18, 10, 0.95);
+      border: 2px solid var(--green);
+      cursor: pointer;
+      box-shadow: 0 0 12px rgba(57, 255, 20, 0.15);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 0 8px;
+    }
+    button:active { background: rgba(57, 255, 20, 0.25); transform: scale(0.97); }
+    button.ghost {
+      color: var(--blue);
+      border-color: var(--blue);
+      box-shadow: 0 0 12px rgba(62, 203, 255, 0.15);
+    }
+
+    .reticle {
+      width: 44px;
+      height: 44px;
+      position: relative;
+      transform: translate(-22px, -22px);
+    }
+    .reticle::before, .reticle::after {
+      content: "";
+      position: absolute;
+      background: var(--blue);
+      box-shadow: 0 0 8px var(--blue);
+    }
+    .reticle::before { left: 21px; top: 6px; width: 2px; height: 32px; }
+    .reticle::after { left: 6px; top: 21px; width: 32px; height: 2px; }
+    .reticle i {
+      position: absolute;
+      inset: 8px;
+      border: 2px solid var(--blue);
+      border-radius: 50%;
+      box-shadow: 0 0 12px rgba(62, 203, 255, 0.55);
+    }
+    .reticle b {
+      position: absolute;
+      inset: 0;
+      border-radius: 50%;
+      border: 1px solid rgba(62, 203, 255, 0.35);
+      animation: ping 1.8s ease-out infinite;
+    }
+
+    @keyframes ping {
+      from { transform: scale(0.7); opacity: 0.9; }
+      to { transform: scale(2.1); opacity: 0; }
+    }
+
+    .operator {
+      width: 18px;
+      height: 18px;
+      transform: translate(-9px, -9px);
+      border: 2px solid var(--green);
+      background: rgba(57, 255, 20, 0.25);
+      box-shadow: 0 0 14px var(--green);
+      clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
+    }
+
+    .leaflet-tooltip.tac-tip {
+      background: rgba(4, 12, 8, 0.92);
+      border: 1px solid var(--green);
+      color: var(--green);
+      font-family: inherit;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      box-shadow: none;
+    }
+    .leaflet-tooltip.tac-tip::before { border-top-color: var(--green); }
+    .leaflet-tooltip.tac-tip.enemy { border-color: var(--red); color: var(--red); }
+    .leaflet-tooltip.tac-tip.enemy::before { border-top-color: var(--red); }
+    .leaflet-tooltip.tac-tip.objective { border-color: var(--amber); color: var(--amber); }
+    .leaflet-tooltip.tac-tip.objective::before { border-top-color: var(--amber); }
+    .leaflet-tooltip.tac-tip.respawn { border-color: var(--green); color: var(--green); }
+
+    .mk {
+      width: 28px;
+      height: 28px;
+      display: grid;
+      place-items: center;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1;
+    }
+    .mk-enemy {
+      border: 2px solid var(--red);
+      border-radius: 50%;
+      color: var(--red);
+      background: rgba(255, 59, 59, 0.22);
+      box-shadow: 0 0 12px rgba(255, 59, 59, 0.7);
+    }
+    .mk-objective {
+      width: 0;
+      height: 0;
+      border-left: 11px solid transparent;
+      border-right: 11px solid transparent;
+      border-bottom: 20px solid var(--amber);
+      filter: drop-shadow(0 0 7px var(--amber));
+      background: none;
+    }
+    .mk-respawn {
+      border: 2px solid var(--green);
+      color: var(--green);
+      background: rgba(57, 255, 20, 0.18);
+      box-shadow: 0 0 12px rgba(57, 255, 20, 0.55);
+      clip-path: polygon(50% 0%, 92% 22%, 92% 72%, 50% 100%, 8% 72%, 8% 22%);
+    }
+
+    .leaflet-popup-content-wrapper {
+      background: rgba(4, 12, 8, 0.98);
+      color: var(--text);
+      border: 2px solid var(--green);
+      border-radius: 0;
+      box-shadow: 0 0 24px rgba(57, 255, 20, 0.3);
+    }
+    .leaflet-popup-tip {
+      background: rgba(4, 12, 8, 0.98);
+      border: 2px solid var(--green);
+      box-shadow: none;
+    }
+    .leaflet-popup-content {
+      margin: 12px 14px;
+      font-family: inherit;
+    }
+    .leaflet-container a.leaflet-popup-close-button { color: var(--green); scale: 1.3; padding: 6px; }
+
+    .tac-menu { display: flex; flex-direction: column; gap: 8px; min-width: 200px; }
+    .tac-menu-h, .tac-pop-title {
+      color: var(--green);
+      letter-spacing: 0.16em;
+      font-size: 13px;
+      font-weight: bold;
+      text-align: center;
+      margin-bottom: 6px;
+      border-bottom: 1px dashed var(--line);
+      padding-bottom: 4px;
+    }
+    .tac-menu button, .tac-pop button {
+      height: 55px;
+      font-size: 14px;
+      width: 100%;
+      box-shadow: none;
+    }
+    .tac-menu button[data-type="enemy"] { color: var(--red); border-color: var(--red); }
+    .tac-menu button[data-type="objective"] { color: var(--amber); border-color: var(--amber); }
+    .tac-menu button[data-type="respawn"] { color: var(--green); border-color: var(--green); }
+    .tac-menu button[data-type="cancel"] { color: var(--muted); border-color: var(--muted); }
+    .tac-pop button { color: var(--red); border-color: var(--red); margin-top: 8px; }
+
+    .toast {
+      position: absolute;
+      bottom: 96px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 700;
+      pointer-events: none;
+      background: var(--panel);
+      border: 1px solid var(--amber);
+      color: var(--amber);
+      padding: 10px 16px;
+      font-size: 13px;
+      letter-spacing: 0.08em;
+      opacity: 0;
+      transition: opacity 0.25s;
+      max-width: 90vw;
+      text-align: center;
+      box-shadow: 0 0 15px rgba(212, 255, 0, 0.2);
+    }
+    .toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="hud">
+    <div class="scan"></div>
+    <div class="sweep"></div>
+    <div class="corner tl"></div>
+    <div class="corner tr"></div>
+    <div class="corner bl"></div>
+    <div class="corner br"></div>
+
+    <div class="topbar">
+      <div class="topbar-header">
+        <div class="brand">TAC-RADAR <span>// TM</span></div>
+        <div class="status">
+          <div>GPS <b id="gpsState">SEEK</b></div>
+          <div>ACC <b id="accState">-- m</b></div>
+          <div>HDG <b id="hdgState">---°</b></div>
+          <div>UTC <b id="clock">--:--:--</b></div>
+        </div>
+      </div>
+      <div class="telemetry-row">
+        <div class="telemetry-item"><span>LAT:</span><strong id="latVal">--</strong></div>
+        <div class="telemetry-item"><span>LON:</span><strong id="lonVal">--</strong></div>
+        <div class="telemetry-item"><span>SPD:</span><strong id="spdVal">0.0 m/s</strong></div>
+        <div class="telemetry-item"><span>FIX:</span><strong id="fixVal">NO LOCK</strong></div>
+        <div class="telemetry-item"><span>ALPHA:</span><strong id="alphaRange">OFFLINE</strong></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="dock">
+    <button type="button" id="btnAlpha">Simula Alpha (50m)</button>
+    <button type="button" class="ghost" id="btnCenter">Centra GPS</button>
+  </div>
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const EARTH = 6371000;
+    const DEFAULT = [41.9028, 12.4964];
+
+    const el = (id) => document.getElementById(id);
+
+    const map = L.map("map", {
+      zoomControl: false,
+      attributionControl: true,
+      doubleClickZoom: false,
+      minZoom: 3,
+      maxZoom: 18,
+      tap: false
+    }).setView(DEFAULT, 16);
+
+    L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}", {
+      attribution: "Map tiles",
+      maxZoom: 18,
+    }).addTo(map);
+
+    const rangeLayer = L.layerGroup().addTo(map);
+
+    const youIcon = L.divIcon({
+      className: "",
+      html: '<div class="reticle"><i></i><b></b></div>',
+      iconSize: [44, 44],
+      iconAnchor: [22, 22],
+    });
+
+    const alphaIcon = L.divIcon({
+      className: "",
+      html: '<div class="operator"></div>',
+      iconSize: [18, 18],
+      iconAnchor: [9, 9],
+    });
+
+    const youMarker = L.marker(DEFAULT, { icon: youIcon, zIndexOffset: 1000 })
+      .addTo(map)
+      .bindTooltip("YOU // GPS", { className: "tac-tip", direction: "top", offset: [0, -18] });
+
+    let accuracyCircle = L.circle(DEFAULT, {
+      radius: 0,
+      color: "#3ecbff",
+      weight: 1,
+      fillColor: "#3ecbff",
+      fillOpacity: 0.08,
+    }).addTo(map);
+
+    let alphaMarker = null;
+    let follow = true;
+    let lastFix = null;
+    let lastHeading = null;
+    let alphaBearing = 45;
+    let simMode = false;
+    let gpsLive = false;
+    let pendingSim = null;
+    let skipSimClick = false;
+    let holdTimer = null;
+    let holdOrigin = null;
+    let isDraggingMap = false;
+    let tacId = 1;
+    const tacMarkers = [];
+
+    const MARK = {
+      enemy: { label: "NEMICO", cls: "mk-enemy", glyph: "X" },
+      objective: { label: "OBIETTIVO", cls: "mk-objective", glyph: "" },
+      respawn: { label: "RESPAWN", cls: "mk-respawn", glyph: "+" },
+    };
+
+    function toast(msg) {
+      const t = el("toast");
+      t.textContent = msg;
+      t.classList.add("show");
+      clearTimeout(toast._t);
+      toast._t = setTimeout(() => t.classList.remove("show"), 3200);
+    }
+
+    function fmt(n, d) {
+      return Number.isFinite(n) ? n.toFixed(d) : "--";
+    }
+
+    function destination(lat, lon, meters, bearingDeg) {
+      const brng = bearingDeg * Math.PI / 180;
+      const φ1 = lat * Math.PI / 180;
+      const λ1 = lon * Math.PI / 180;
+      const δ = meters / EARTH;
+      const φ2 = Math.asin(Math.sin(φ1) * Math.cos(δ) + Math.cos(φ1) * Math.sin(δ) * Math.cos(brng));
+      const λ2 = λ1 + Math.atan2(
+        Math.sin(brng) * Math.sin(δ) * Math.cos(φ1),
+        Math.cos(δ) - Math.sin(φ1) * Math.sin(φ2)
+      );
+      return [φ2 * 180 / Math.PI, λ2 * 180 / Math.PI];
+    }
+
+    function haversine(a, b) {
+      const φ1 = a[0] * Math.PI / 180;
+      const φ2 = b[0] * Math.PI / 180;
+      const dφ = (b[0] - a[0]) * Math.PI / 180;
+      const dλ = (b[1] - a[1]) * Math.PI / 180;
+      const s = Math.sin(dφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(dλ / 2) ** 2;
+      return 2 * EARTH * Math.asin(Math.sqrt(s));
+    }
+
+    function drawRanges(center) {
+      rangeLayer.clearLayers();
+      [25, 50, 100, 200].forEach((r) => {
+        L.circle(center, {
+          radius: r,
+          color: "#39ff14",
+          weight: r === 50 ? 1.6 : 0.7,
+          opacity: r === 50 ? 0.55 : 0.25,
+          fill: false,
+          dashArray: r === 50 ? null : "4 6",
+          interactive: false,
+        }).addTo(rangeLayer);
+      });
+    }
+
+    function updateAlphaDistance() {
+      if (!alphaMarker || !lastFix) {
+        el("alphaRange").textContent = alphaMarker ? "LOCK" : "OFFLINE";
+        return;
+      }
+      const d = haversine(lastFix, [alphaMarker.getLatLng().lat, alphaMarker.getLatLng().lng]);
+      el("alphaRange").textContent = Math.round(d) + " m";
+    }
+
+    function originPos() {
+      return lastFix || [map.getCenter().lat, map.getCenter().lng];
+    }
+
+    function markDistanceText(type, latlng) {
+      const d = Math.round(haversine(originPos(), [latlng.lat, latlng.lng]));
+      return MARK[type].label + " · " + d + " m";
+    }
+
+    function refreshMarkerLabels() {
+      tacMarkers.forEach((m) => {
+        m.marker.setTooltipContent(markDistanceText(m.type, m.marker.getLatLng()));
+      });
+    }
+
+    function markIcon(type) {
+      const spec = MARK[type];
+      return L.divIcon({
+        className: "",
+        html: '<div class="mk ' + spec.cls + '">' + spec.glyph + "</div>",
+        iconSize: [28, 28],
+        iconAnchor: [14, 14],
+      });
+    }
+
+    function removeTacMarker(id) {
+      const i = tacMarkers.findIndex((m) => m.id === id);
+      if (i < 0) return;
+      map.removeLayer(tacMarkers[i].marker);
+      tacMarkers.splice(i, 1);
+      map.closePopup();
+      toast("MARCATORE RIMOSSO");
+    }
+
+    function placeTacMarker(type, latlng) {
+      const id = tacId++;
+      const marker = L.marker(latlng, { icon: markIcon(type), zIndexOffset: 800 }).addTo(map);
+      marker.bindTooltip(markDistanceText(type, latlng), {
+        permanent: true,
+        direction: "right",
+        offset: [14, 0],
+        className: "tac-tip " + type,
+      });
+      marker.bindPopup(
+        '<div class="tac-pop"><div class="tac-pop-title">' + MARK[type].label +
+          '</div><button type="button" class="tac-remove">Rimuovi</button></div>',
+        { className: "tac-leaflet-pop", closeButton: false }
+      );
+      marker.on("popupopen", () => {
+        const btn = marker.getPopup().getElement().querySelector(".tac-remove");
+        if (btn) btn.onclick = () => removeTacMarker(id);
+      });
+      marker.on("click", (ev) => L.DomEvent.stopPropagation(ev));
+      marker.on("dblclick", (ev) => L.DomEvent.stopPropagation(ev));
+      tacMarkers.push({ id, type, marker });
+      map.closePopup();
+      toast(MARK[type].label + " PIAZZATO");
+    }
+
+    function openTacMenu(latlng) {
+      if (isDraggingMap) return;
+      skipSimClick = true;
+      clearTimeout(pendingSim);
+      pendingSim = null;
+      const html =
+        '<div class="tac-menu"><div class="tac-menu-h">SEGNALAZIONE</div>' +
+        '<button type="button" data-type="enemy">NEMICO</button>' +
+        '<button type="button" data-type="objective">OBIETTIVO</button>' +
+        '<button type="button" data-type="respawn">RESPAWN</button>' +
+        '<button type="button" data-type="cancel">ANNULLA</button></div>';
+      const popup = L.popup({ className: "tac-leaflet-pop", closeButton: false, maxWidth: 240 })
+        .setLatLng(latlng)
+        .setContent(html);
+      popup.on("add", () => {
+        const root = popup.getElement();
+        if (!root) return;
+        root.querySelectorAll("[data-type]").forEach((btn) => {
+          btn.addEventListener("click", (ev) => {
+            L.DomEvent.stop(ev);
+            const t = btn.getAttribute("data-type");
+            map.closePopup();
+            if (t !== "cancel") placeTacMarker(t, latlng);
+          });
+        });
+      });
+      popup.openOn(map);
+    }
+
+    function applyFix(lat, lon, extras) {
+      lastFix = [lat, lon];
+      youMarker.setLatLng(lastFix);
+      accuracyCircle.setLatLng(lastFix);
+      accuracyCircle.setRadius(extras.accuracy || 0);
+      drawRanges(lastFix);
+      if (follow) map.setView(lastFix, Math.max(map.getZoom(), 16), { animate: false });
+
+      el("latVal").textContent = fmt(lat, 5);
+      el("lonVal").textContent = fmt(lon, 5);
+      el("spdVal").textContent = extras.speed != null && extras.speed >= 0
+        ? extras.speed.toFixed(1) + " m/s"
+        : "0.0 m/s";
+      el("accState").textContent = extras.accuracy != null ? Math.round(extras.accuracy) + " m" : "-- m";
+      if (extras.simulated) {
+        el("gpsState").textContent = "SIM";
+        el("gpsState").className = "warn";
+        el("fixVal").textContent = "FIX SIMULATO";
+      } else {
+        el("gpsState").textContent = "LOCK";
+        el("gpsState").className = "";
+        el("fixVal").textContent = extras.accuracy != null && extras.accuracy <= 25 ? "HIGH" : "LIVE";
+      }
+      if (Number.isFinite(extras.heading)) {
+        lastHeading = extras.heading;
+        el("hdgState").textContent = Math.round(extras.heading) + "°";
+      }
+      updateAlphaDistance();
+      refreshMarkerLabels();
+    }
+
+    function spawnAlpha() {
+      const origin = lastFix || [map.getCenter().lat, map.getCenter().lng];
+      alphaBearing = (alphaBearing + 67) % 360;
+      const pos = destination(origin[0], origin[1], 50, alphaBearing);
+      if (alphaMarker) {
+        alphaMarker.setLatLng(pos);
+      } else {
+        alphaMarker = L.marker(pos, { icon: alphaIcon, zIndexOffset: 900 })
+          .addTo(map)
+          .bindTooltip("OPERATORE ALPHA", { className: "tac-tip", direction: "top", offset: [0, -10] });
+      }
+      updateAlphaDistance();
+      map.panTo(pos, { animate: true });
+      follow = false;
+      toast("CONTATTO: ALPHA · 50 m · BRG " + Math.round(alphaBearing) + "°");
+    }
+
+    el("btnAlpha").addEventListener("click", spawnAlpha);
+    el("btnCenter").addEventListener("click", () => {
+      follow = true;
+      if (lastFix) map.setView(lastFix, 16);
+      toast(simMode ? "CENTRATO SU FIX SIMULATO" : "TRACKING GPS ATTIVO");
+    });
+
+    map.on("dragstart", () => {
+      follow = false;
+      isDraggingMap = true;
+      cancelHold();
+      clearTimeout(pendingSim);
+      pendingSim = null;
+    });
+
+    map.on("dragend", () => {
+      setTimeout(() => {
+        isDraggingMap = false;
+      }, 80);
+    });
+
+    map.on("click", (e) => {
+      if (isDraggingMap) return;
+      if (skipSimClick) {
+        skipSimClick = false;
+        return;
+      }
+      clearTimeout(pendingSim);
+      pendingSim = setTimeout(() => {
+        if (isDraggingMap) return;
+        pendingSim = null;
+        simMode = true;
+        follow = true;
+        applyFix(e.latlng.lat, e.latlng.lng, { accuracy: 8, speed: 0, simulated: true });
+        toast("FIX SIMULATO CONFIGURATO");
+      }, 280);
+    });
+
+    map.on("dblclick", (e) => {
+      if (isDraggingMap) return;
+      clearTimeout(pendingSim);
+      pendingSim = null;
+      skipSimClick = true;
+      openTacMenu(e.latlng);
+    });
+
+    function cancelHold() {
+      clearTimeout(holdTimer);
+      holdTimer = null;
+      holdOrigin = null;
+    }
+
+    map.on("mousedown", (e) => {
+      if (e.originalEvent && e.originalEvent.button !== 0) return;
+      if (isDraggingMap) return;
+      holdOrigin = e.containerPoint;
+      clearTimeout(holdTimer);
+      holdTimer = setTimeout(() => {
+        if (!isDraggingMap) {
+          holdTimer = null;
+          openTacMenu(e.latlng);
+        }
+      }, 600);
+    });
+    map.on("mouseup", cancelHold);
+    map.on("mousemove", (e) => {
+      if (!holdTimer || !holdOrigin) return;
+      if (e.containerPoint.distanceTo(holdOrigin) > 10) cancelHold();
+    });
+
+    map.on("touchstart", (e) => {
+      if (isDraggingMap) return;
+      holdOrigin = e.containerPoint;
+      clearTimeout(holdTimer);
+      holdTimer = setTimeout(() => {
+        if (!isDraggingMap) {
+          holdTimer = null;
+          openTacMenu(e.latlng);
+        }
+      }, 600);
+    });
+    map.on("touchend", cancelHold);
+    map.on("touchmove", (e) => {
+      if (!holdTimer || !holdOrigin) return;
+      if (e.containerPoint && e.containerPoint.distanceTo(holdOrigin) > 10) {
+        cancelHold();
+      }
+    });
+
+    function startGps() {
+      if (!navigator.geolocation) {
+        el("gpsState").textContent = "N/A";
+        el("gpsState").className = "bad";
+        toast("GPS NON SUPPORTATO DA QUESTO BROWSER");
+        return;
+      }
+      navigator.geolocation.watchPosition(
+        (pos) => {
+          gpsLive = true;
+          if (simMode) return;
+          applyFix(pos.coords.latitude, pos.coords.longitude, {
+            accuracy: pos.coords.accuracy,
+            speed: pos.coords.speed,
+            heading: pos.coords.heading,
+          });
+        },
+        (err) => {
+          gpsLive = false;
+          if (simMode) return;
+          el("gpsState").textContent = "DENIED";
+          el("gpsState").className = "bad";
+          el("fixVal").textContent = "NO LOCK";
+          toast("ATTIVA IL GPS E CONSENTI L'ACCESSO ALLA POSIZIONE");
+        },
+        { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 }
+      );
+    }
+
+    setInterval(() => {
+      const d = new Date();
+      el("clock").textContent = d.toISOString().slice(11, 19);
+    }, 1000);
+
+    drawRanges(DEFAULT);
+    startGps();
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js').catch(err => console.log("SW Error", err));
+    }
+  </script>
+</body>
+</html>
